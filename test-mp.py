@@ -8,6 +8,7 @@ import random
 import pickle
 
 import multiprocessing as mp
+from multiprocessing.managers import BaseManager
 
 from tpg.tpg_trainer import TpgTrainer
 from tpg.tpg_agent import TpgAgent
@@ -34,12 +35,16 @@ def runAgent(agenteqsq):
         return
         
     print('envs in queue:',eq.qsize())
-    env = eq.get() # get an environment
+    print('getting env')
+    envw = eq.get() # get an environment
+    env = envw.env
+    print('got env')
     state = env.reset() # get initial state and prep environment
+    print('reseting env')
     
     valActs = range(env.action_space.n)
     score = 0
-    for i in range(50): # run episodes that last 200 frames
+    for i in range(1000): # run episodes that last 200 frames
         act = agent.act(getState(state), valActs=valActs) # get action from agent
         
         # feedback from env
@@ -52,14 +57,23 @@ def runAgent(agenteqsq):
     
     print('Agent #' + str(agent.getAgentNum()) + ' finished with score ' + str(score))
     sq.put((agent.getUid(), agent.getOutcomes())) # get outcomes with id
-    eq.put(env) # put environment back
+    eq.put(envw) # put environment back
 
+class EnvWrapper:
+    def __init__(self, env):
+        self.env = env
 
+class EnvManager(BaseManager):
+    pass
+
+EnvManager.register('EnvWrapper',EnvWrapper)
 
 
 tStart = time.time()
 processes = 3 # how many to run concurrently (3 is best for my local desktop)
 m = mp.Manager()
+m2 = EnvManager()
+m2.start()
 
 allGames = ['gvgai-testgame1-lvl0-v0','gvgai-testgame1-lvl1-v0',
             'gvgai-testgame2-lvl0-v0','gvgai-testgame2-lvl0-v0',
@@ -70,12 +84,12 @@ envs = {}
 for game in allGames:
     envs[game] = []
     for p in range(processes): # each process needs its own environment
-        envs[game].append(gym.make(game))
+        envs[game].append(EnvWrapper(gym.make(game)))
         
 gameQueue = list(allGames)
 random.shuffle(gameQueue)
     
-trainer = TpgTrainer(actions=range(6), teamPopSizeInit=50)
+trainer = TpgTrainer(actions=range(6), teamPopSizeInit=360)
 
 pool = mp.Pool(processes=processes)
     
@@ -83,7 +97,7 @@ summaryScores = [] # record score summaries for each gen (min, max, avg)
     
 for gen in range(100): # generation loop
     scoreQueue = m.Queue() # hold agents when finish, to actually apply score
-    envQueue = m.Queue() # hold envs for current gen
+    envQueue = queue.Queue() # hold envs for current gen
     
     # get right env in envQueue
     game = gameQueue.pop() # take out last game
@@ -94,14 +108,14 @@ for gen in range(100): # generation loop
     if len(gameQueue) == 0:
         gameQueue = list(allGames)
         random.shuffle(gameQueue)
-        
+    
     # tasks = [str(envs[game][0].env)]
     
     # run generation
     # skipTasks=[] so we get all agents, even if already scored,
     # just to report the obtained score for all agents.
     pool.map(runAgent, 
-                 [(agent, envQueue, scoreQueue) 
+                 [(agent, envQueue, scoreQueue)
                   for agent in trainer.getAllAgents(skipTasks=[])])
     
     scores = [] # convert scores into list
@@ -120,10 +134,11 @@ for gen in range(100): # generation loop
     summaryScores.append((trainer.scoreStats['min'], 
                     trainer.scoreStats['max'],
                     trainer.scoreStats['average'])) # min, max, avg
-
+    print(chr(27) + "[2J")
     print('Time Taken (Seconds): ' + str(time.time() - tStart))
     print('Results so far: ' + str(summaryScores))
-    
+  
+print(chr(27) + "[2J")  
 print('Time Taken (Seconds): ' + str(time.time() - tStart))
 print('Results: ' + str(summaryScores))
 
