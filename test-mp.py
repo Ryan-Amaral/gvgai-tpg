@@ -6,6 +6,8 @@ import gym_gvgai
 import time
 import random
 import pickle
+import psutil
+import os
 
 import multiprocessing as mp
 from multiprocessing.managers import BaseManager
@@ -22,94 +24,73 @@ def getState(state):
             
     return state2
 
-def acquireEnv():
-    return envQueue.g
+# https://stackoverflow.com/questions/42103367/limit-total-cpu-usage-in-python-multiprocessing/42130713
+def limit_cpu():
+    p = psutil.Process(os.getpid())
+    p.nice(19)
 
 # run agent in function to work with multiprocessing
-def runAgent(agentiqsq):
-    agent = agentiqsq[0] # get agent
-    iq = agentiqsq[1] # get env id queue
-    sq = agentiqsq[2] # get score queue
+def runAgent(agentgmsq):
+    agent = agentgmsq[0] # get agent
+    game = agentgmsq[1] # get game name to create env
+    sq = agentgmsq[2] # get score queue
     
     # check if agent already has score
     if agent.taskDone():
         print('Agent #' + str(agent.getAgentNum()) + ' can skip.')
         sq.put((agent.getUid(), agent.getOutcomes()))
         return
-        
-    #print('envs in queue:',eq.qsize())
-    print('getting env')
-    #envw = eq.get() # get an environment
-    #env = envw.env
-    env = gym.make(eq)
-    print('got env')
+    
+    #print('creating env')
+    env = gym.make(game)
+    #print('got env')
     state = env.reset() # get initial state and prep environment
-    print('reseting env')
+    #print('reset env')
     
     valActs = range(env.action_space.n)
     score = 0
-    for i in range(1000): # run episodes that last 200 frames
+    for i in range(1000): # run episode
         act = agent.act(getState(state), valActs=valActs) # get action from agent
-        
+
         # feedback from env
         state, reward, isDone, debug = env.step(act)
         score += reward # accumulate reward in score
         if isDone:
             break # end early if losing state
+
+    env.close()
         
     agent.reward(score) # must reward agent
     
     print('Agent #' + str(agent.getAgentNum()) + ' finished with score ' + str(score))
     sq.put((agent.getUid(), agent.getOutcomes())) # get outcomes with id
-    #eq.put(envw) # put environment back
 
-class EnvWrapper:
-    def __init__(self, env):
-        self.env = env
-
-class EnvManager(BaseManager):
-    pass
-
-EnvManager.register('EnvWrapper',EnvWrapper)
 
 
 tStart = time.time()
-processes = 3 # how many to run concurrently (3 is best for my local desktop)
+processes = 2 # how many to run concurrently
 m = mp.Manager()
-m2 = EnvManager()
-m2.start()
 
 allGames = ['gvgai-testgame1-lvl0-v0','gvgai-testgame1-lvl1-v0',
             'gvgai-testgame2-lvl0-v0','gvgai-testgame2-lvl0-v0',
             'gvgai-testgame3-lvl0-v0','gvgai-testgame3-lvl1-v0']
 allGames = ['Assault-v0']
-
-envs = {}
-for game in allGames:
-    envs[game] = []
-    for p in range(processes): # each process needs its own environment
-        envs[game].append(EnvWrapper(gym.make(game)))
         
 gameQueue = list(allGames)
 random.shuffle(gameQueue)
     
 trainer = TpgTrainer(actions=range(6), teamPopSizeInit=360)
 
-pool = mp.Pool(processes=processes)
+pool = mp.Pool(processes=processes, initializer=limit_cpu)
     
 summaryScores = [] # record score summaries for each gen (min, max, avg)
     
 for gen in range(100): # generation loop
     scoreQueue = m.Queue() # hold agents when finish, to actually apply score
-    envQueue = m.Queue() # hold envs for current gen
-    idQueue = m.Queue() # hold id (indexes) for thread to get env
     
     # get right env in envQueue
     game = gameQueue.pop() # take out last game
     print('playing on', game)
-    for p in range(processes):
-        envQueue.put(envs[game][p])
-        idQueue.put(p)
     # re-get games list
     if len(gameQueue) == 0:
         gameQueue = list(allGames)
@@ -118,10 +99,8 @@ for gen in range(100): # generation loop
     # tasks = [str(envs[game][0].env)]
     
     # run generation
-    # skipTasks=[] so we get all agents, even if already scored,
-    # just to report the obtained score for all agents.
     pool.map(runAgent, 
-                 [(agent, idQueue, scoreQueue)#(agent, envQueue, scoreQueue)
+                 [(agent, game, scoreQueue)#(agent, envQueue, scoreQueue)
                   for agent in trainer.getAllAgents(skipTasks=[])])
     
     scores = [] # convert scores into list
