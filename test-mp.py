@@ -22,11 +22,14 @@ def getState(state):
             
     return state2
 
+def acquireEnv():
+    return envQueue.g
+
 # run agent in function to work with multiprocessing
-def runAgent(agenteqsq):
-    agent = agenteqsq[0] # get agent
-    eq = agenteqsq[1] # get environment queue
-    sq = agenteqsq[2] # get score queue
+def runAgent(agentiqsq):
+    agent = agentiqsq[0] # get agent
+    iq = agentiqsq[1] # get env id queue
+    sq = agentiqsq[2] # get score queue
     
     # check if agent already has score
     if agent.taskDone():
@@ -34,10 +37,11 @@ def runAgent(agenteqsq):
         sq.put((agent.getUid(), agent.getOutcomes()))
         return
         
-    print('envs in queue:',eq.qsize())
+    #print('envs in queue:',eq.qsize())
     print('getting env')
-    envw = eq.get() # get an environment
-    env = envw.env
+    #envw = eq.get() # get an environment
+    #env = envw.env
+    env = gym.make(eq)
     print('got env')
     state = env.reset() # get initial state and prep environment
     print('reseting env')
@@ -57,7 +61,7 @@ def runAgent(agenteqsq):
     
     print('Agent #' + str(agent.getAgentNum()) + ' finished with score ' + str(score))
     sq.put((agent.getUid(), agent.getOutcomes())) # get outcomes with id
-    eq.put(envw) # put environment back
+    #eq.put(envw) # put environment back
 
 class EnvWrapper:
     def __init__(self, env):
@@ -93,17 +97,19 @@ trainer = TpgTrainer(actions=range(6), teamPopSizeInit=360)
 
 pool = mp.Pool(processes=processes)
     
-summaryScores = [] # record score summaries for each gen (min, max, avg) 
+summaryScores = [] # record score summaries for each gen (min, max, avg)
     
 for gen in range(100): # generation loop
     scoreQueue = m.Queue() # hold agents when finish, to actually apply score
-    envQueue = queue.Queue() # hold envs for current gen
+    envQueue = m.Queue() # hold envs for current gen
+    idQueue = m.Queue() # hold id (indexes) for thread to get env
     
     # get right env in envQueue
     game = gameQueue.pop() # take out last game
     print('playing on', game)
     for p in range(processes):
         envQueue.put(envs[game][p])
+        idQueue.put(p)
     # re-get games list
     if len(gameQueue) == 0:
         gameQueue = list(allGames)
@@ -115,19 +121,23 @@ for gen in range(100): # generation loop
     # skipTasks=[] so we get all agents, even if already scored,
     # just to report the obtained score for all agents.
     pool.map(runAgent, 
-                 [(agent, envQueue, scoreQueue)
+                 [(agent, idQueue, scoreQueue)#(agent, envQueue, scoreQueue)
                   for agent in trainer.getAllAgents(skipTasks=[])])
     
     scores = [] # convert scores into list
     while not scoreQueue.empty():
         scores.append(scoreQueue.get())
+
+    # save model before every evolve in case issue
+    with open('gvgai-model-1be.pkl','wb') as f:
+        pickle.dump(trainer,f)
     
     # apply scores
     trainer.applyScores(scores)
     trainer.evolve() # go into next gen
     
     # save model after every gen
-    with open('gvgai-model-1.pkl','wb') as f:
+    with open('gvgai-model-1ae.pkl','wb') as f:
         pickle.dump(trainer,f)
 
     # at end of generation, make summary of scores
